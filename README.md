@@ -7,7 +7,7 @@ If you want to learn more about Quarkus, please visit its website: https://quark
 
 ## Status
 
-This is a simple case study for comparing [Golang](johbar/text-extraction-service) and Java/Quarkus.
+This is a simple case study for comparing [Golang](https://github.com/johbar/text-extraction-service) and Java/Quarkus.
 
 
 ## Running the application in dev mode
