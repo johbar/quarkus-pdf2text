@@ -1,7 +1,6 @@
 package johbar;
 
 
-import io.quarkus.runtime.Startup;
 import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.io.MemoryUsageSetting;
 import org.apache.pdfbox.pdmodel.PDDocument;
@@ -22,7 +21,6 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.util.concurrent.CompletionException;
-import java.util.concurrent.ExecutionException;
 
 @WebServlet(urlPatterns = "/stream")
 @Singleton
