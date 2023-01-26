@@ -31,8 +31,6 @@ public class PdfToTextStreamServlet extends HttpServlet {
     }
 
 
-
-
     final HttpClient httpClient = HttpClient.newBuilder().build();
 
     private static final Logger LOG = Logger.getLogger(PdfToTextStreamServlet.class);
