@@ -1,17 +1,20 @@
 package johbar;
 
 
-import org.jboss.logging.Logger;
-import org.jboss.resteasy.reactive.RestQuery;
+import java.io.IOException;
+import java.net.URI;
+import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 
 import javax.inject.Inject;
 import javax.ws.rs.GET;
 import javax.ws.rs.Path;
 import javax.ws.rs.Produces;
 import javax.ws.rs.core.MediaType;
-import java.net.URI;
-import java.util.Map;
-import java.util.concurrent.CompletableFuture;
+
+import org.jboss.logging.Logger;
+import org.jboss.resteasy.reactive.RestQuery;
 
 @Path("/pdf")
 public class PdfExtractResource {
@@ -35,7 +38,7 @@ public class PdfExtractResource {
     }
 
     @Path("json")
-    @Produces("application/json")
+    @Produces(MediaType.APPLICATION_JSON)
     @GET
     public CompletableFuture<Map<String, String>> getJson(@RestQuery URI url) {
         return service
@@ -43,4 +46,12 @@ public class PdfExtractResource {
                 .thenApply(service::getTextAndMetadata);
     }
 
+
+    @Path("large")
+    @Produces(MediaType.TEXT_PLAIN)
+    @GET
+    public CompletableFuture<String> getLargeText(@RestQuery URI url) throws IOException, InterruptedException, ExecutionException {
+        return service.loadStream(url).thenApply(service::pdfToText).get();
+
+    }
 }
