@@ -12,10 +12,12 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ForkJoinPool;
 import java.util.stream.Collectors;
 
@@ -45,26 +47,32 @@ public class PdfToTextService {
     @ConfigItem(name = "pdfbox.max.memory.mebibytes")
     int maxMemory;
 
+    boolean dehypenationEnabled = true;
+
     @PostConstruct
     void init() {
         this.httpClient = HttpClient.newBuilder().executor(this.executor).build();
         LOG.info("Number of Threads in ForkJoinPool: " + ForkJoinPool.getCommonPoolParallelism());
+
     }
 
     public CompletableFuture<String> remotePdfToText(final URI uri) {
-        return this.loadFromUriAsync(uri).thenApply(this::getTextAndClose);
+        return this
+                .loadFromUriAsync(uri)
+                .thenComposeAsync(this::getTextAndClose, this.executor);
     }
 
     public CompletableFuture<InputStream> loadStream(final URI uri) {
         final var req = HttpRequest.newBuilder(uri).build();
         LOG.info("Start downloading of " + uri);
-        return this.httpClient.sendAsync(req, HttpResponse.BodyHandlers.ofInputStream())
-                .thenApply(HttpResponse::body);
+        return this.httpClient
+                .sendAsync(req, HttpResponse.BodyHandlers.ofInputStream())
+                .thenApplyAsync(HttpResponse::body, this.executor);
     }
 
     public CompletableFuture<PDDocument> loadFromUriAsync(final URI uri) {
         final var doc = this.loadStream(uri)
-                .thenApply(this::loadPdf);
+                .thenApplyAsync(this::loadPdf, this.executor);
         return doc;
     }
 
@@ -81,8 +89,7 @@ public class PdfToTextService {
         return doc;
     }
 
-    public String getTextAndClose(final PDDocument doc) {
-        String result;
+    public CompletableFuture<String> getTextAndClose(final PDDocument doc) {
         if (doc == null) {
             LOG.error("Document is null :(");
             return null;
@@ -90,75 +97,80 @@ public class PdfToTextService {
         LOG.info("Extracting Text...");
         final var nPages = doc.getNumberOfPages();
         LOG.info("Number of pages: " + nPages);
-        try (doc) {
-            final PDFTextStripper pts = new PDFTextStripper();
-            final var os = new PipedOutputStream();
-            final var ow = new OutputStreamWriter(os);
+        final PDFTextStripper pts = new PDFTextStripper();
+        final var os = new PipedOutputStream();
+        final var ow = new OutputStreamWriter(os);
+
+        CompletableFuture<String> result = this.executor.supplyAsync(() -> this.dehyphenate(os));
+        try (doc; ow) {
+            LOG.debug("TextStripper started");
+            pts.writeText(doc, ow);
+            LOG.debug("TextStripper finished");
+        } catch (final IOException e) {
+            LOG.error(e);
+        }
+        return result;
+    }
+
+    String dehyphenate (PipedOutputStream os) {
+        final var sb = new StringBuilder();
+        
+        try {
             final var is = new PipedInputStream(os);
             final var isr = new InputStreamReader(is);
             final var br = new BufferedReader(isr);
-            CompletableFuture.runAsync(() -> {
-                try {
-                    pts.writeText(doc, ow);
-                    ow.close();
-                } catch (final IOException e) {
-                    LOG.error(e);
-                }
-            }, this.executor);
-            final var sb = new StringBuilder();
-            String l1;
-            l1 = br.readLine();
+            String l1 = br.readLine();
+            LOG.info("First line read for dehyphenation");
             while (true) {
                 // read one line
                 if (null == l1) {
-                    //eof
-                    break;
+                    // LOG.debug("EOF");
+                    break; //EOF
                 }
-                if (l1.strip().isBlank()) {
+                l1 = l1.strip();
+                if (l1.isBlank()) {
                     l1 = br.readLine();
                     continue;
                 }
-                if (l1.strip().endsWith("-")) {
+                if (l1.endsWith("-") && this.dehypenationEnabled) {
                     // the line is a dehyphenation candidate
                     // read another line to verify:
-                    final var l2 = br.readLine();
+                    var l2 = br.readLine();
                     if (null == l2) {
                         sb.append(l1);
+                        // LOG.debug("EOF");
+                        break; //EOF
                     }
-                    if (Character.isLowerCase(l2.strip().charAt(0))) {
+                    l2 = l2.strip();
+                    if (Character.isLowerCase(l2.charAt(0))) {
                         // if the next line starts with a lower case, join it with its predecessor
                         l1 = l1.replaceFirst("-$", l2);
                     } else {
                         // if not, join the first line including the trailing dash with the second
-                        l1 = l1.concat(l2.strip());
+
+                        l1 = l1.concat(l2);
                     }
                 } else {
                     // normal line ending
                     // join lines with space in between
-                    sb.append(l1.strip()).append("\n");
+                    sb.append(l1).append(" ");
                     l1 = br.readLine();
                 }
             }
-            // result = br
-            // .lines()
-            // .map(String::trim)
-            // .collect(Collectors.joining(" "));
             br.close();
-            result = sb.toString().replaceAll("\s+", " ").strip();
-
-        } catch (final Exception ex) {
-            LOG.error(ex.getMessage());
-            throw new CompletionException(ex);
+        } catch (IOException ex) {
+            LOG.error(ex);
         }
-        LOG.info(nPages + " Pages processed. Result Length: " + result.length());
-        return result;
+        var str = sb.toString();
+        LOG.info("Dehyphenation finished. " + LocalDateTime.now());
+        return str;
     }
 
     public Map<String, String> getTextAndMetadata(final PDDocument doc) {
         return this.getTextAndMetadata(doc, "content");
     }
 
-    public Map<String, String> getTextAndMetadata(final PDDocument doc, final String contentKey) {
+    public Map<String, String> getTextAndMetadata(final PDDocument doc, final String contentKey)  {
         final var result = new HashMap<String, String>();
         final var info = doc.getDocumentInformation();
         final var keys = info.getMetadataKeys();
@@ -167,7 +179,14 @@ public class PdfToTextService {
         result.put("modified", DateConverter.toISO8601(info.getModificationDate()));
 
         keys.forEach((k) -> result.put(k, info.getCustomMetadataValue(k)));
-        result.put(contentKey, this.getTextAndClose(doc));
+        String content;
+        try {
+            content = this.getTextAndClose(doc).get();
+        } catch (InterruptedException | ExecutionException ex) {
+            LOG.error(ex);
+            content = "";
+        }
+        result.put(contentKey, content);
 
         return result;
     }
@@ -192,8 +211,8 @@ public class PdfToTextService {
             final var isr = new InputStreamReader(stdout, StandardCharsets.UTF_8);
             final var br = new BufferedReader(isr);
             final var result = br.lines()
-                                .filter(l -> !l.isBlank())
-                                .collect(Collectors.joining("\n"));
+                    .filter(l -> !l.isBlank())
+                    .collect(Collectors.joining("\n"));
             LOG.info("Output consumed from pdftotext");
             return proc.onExit().thenApply(p -> {
                 return result;
